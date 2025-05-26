@@ -1,0 +1,39 @@
+{
+  "5020806901": {
+    "username": "EZINTOHA",
+    "created_at": "2025-05-02T17:44:03.734145",
+    "has_used_paysafe": true,
+    "transactions": [
+      {
+        "order_id": "3081",
+        "amount": 25.65,
+        "currency": "GBP",
+        "payment_method": "Paysafecard",
+        "account_paid_to": "N/A",
+        "timestamp": "2025-05-02T17:44:58.414439"
+      },
+      {
+        "order_id": "3081",
+        "amount": 25.65,
+        "currency": "GBP",
+        "payment_method": "Paysafecard",
+        "account_paid_to": "N/A",
+        "timestamp": "2025-05-02T17:52:50.874215"
+      }
+    ],
+    "admin_flags": {
+      "is_blocked": false,
+      "requires_invoice": false
+    }
+  },
+  "7800450911": {
+    "username": "olatgt",
+    "created_at": "2025-05-02T17:46:34.705140",
+    "has_used_paysafe": false,
+    "transactions": [],
+    "admin_flags": {
+      "is_blocked": false,
+      "requires_invoice": false
+    }
+  }
+}
