@@ -1,10 +1,10 @@
 # === Bot Core Config ===
-BOT_TOKEN = '7978821331:AAEccI_zR3UmigHP4YVI2L3PF7WEX5NBSeY'
-ADMIN_ID = 7800450911
+BOT_TOKEN = 'token'
+ADMIN_ID = ID
 
 # === WooCommerce API Credentials ===
-WC_CONSUMER_KEY = 'ck_9754ff35606c3c4e047a12c8d8ed78d9b89365b5'
-WC_CONSUMER_SECRET = 'cs_5c7d68f43daa2963fbe2e520b1d42e7a98933b0a'
+WC_CONSUMER_KEY = 'ck'
+WC_CONSUMER_SECRET = 'cs'
 WC_API_URL = 'https://thegreenteam.store/wp-json/wc/v3'
 
 # === File Storage Paths ===
