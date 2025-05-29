@@ -14,5 +14,5 @@ def handle_support(m):
 
     bot.send_message(
         m.chat.id,
-        "📞 Contact support via Telegram:\n@tistgt"
+        "📞 Contact support via Telegram:\n@verdesupport"
     )

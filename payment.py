@@ -18,20 +18,15 @@ from utils.file_ops import get_next_payment_method, set_last_payment_method
 from utils.helpers import (
     get_revolut_reference,
     get_revolut_account,
-    get_revolut_artisan,
-    get_wise_account,
-    get_wise_reference,
-    get_wise_invoice_meta
+    get_revolut_artisan
 )
 
-from utils.invoice_generator import generate_reference, generate_invoice
 from utils.user_store import has_used_paysafe, mark_paysafe_used, add_transaction
 from web.paysafe_locator import find_paysafecard_locations
 from utils.service_logic import select_service, update_client_history, clean_name, clean_address
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# ✅ Store invoice sequence safely inside /data/
 GLOBAL_SEQ_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "global_invoice_sequence.json")
 print("📦 Using GLOBAL_SEQ_FILE:", GLOBAL_SEQ_FILE)
 
@@ -54,17 +49,19 @@ def fetch_stores_async(user_id, postcode):
         sessions[user_id]['stores'] = store_text
 
 def debug_log_all(m):
-    from state import sessions
     print(f"🪵 DEBUG TEXT: {repr(m.text)} | TYPE: {m.content_type} | STEP: {sessions.get(m.chat.id, {}).get('step')}")
+
 
 # ==== START BATCH 2: Pay flow (order input and processing) ====
 
-# ✅ Track user's "💳 Pay" message
 @bot.message_handler(func=lambda m: m.text == "💳 Pay")
 def start_payment(m):
     user = m.chat.id
+    # Always (re)create session if missing
+    if user not in sessions:
+        sessions[user] = {}
     print(f"🧠 .Pay triggered by {user}")
-    current_step = sessions.get(user, {}).get("step", "")
+    current_step = sessions[user].get("step", "")
 
     if current_step in ["awaiting_code", "awaiting_bank_screenshot", "awaiting_receipt_photo"]:
         msg = bot.send_message(user,
@@ -73,11 +70,8 @@ def start_payment(m):
         sessions[user].setdefault("message_log", []).append(msg.message_id)
         return
 
-    if user not in sessions:
-        sessions[user] = {}
-    else:
-        preserved = sessions[user].copy()
-        logging.debug(f"[SESSION BEFORE PAY] {preserved}")
+    preserved = sessions[user].copy()
+    logging.debug(f"[SESSION BEFORE PAY] {preserved}")
 
     sessions[user]["step"] = "awaiting_order"
     sessions[user]["message_log"] = []
@@ -90,10 +84,11 @@ def start_payment(m):
     sessions[user]["message_log"].append(msg.message_id)
 
 
-# ✅ Track user's order number input
 @bot.message_handler(func=lambda m: sessions.get(m.chat.id, {}).get("step") == "awaiting_order" and m.text.isdigit())
 def handle_order_number(m):
     user = m.chat.id
+    if user not in sessions:
+        sessions[user] = {}
     sessions[user].setdefault("message_log", []).append(m.message_id)
     order_id = m.text.strip()
     order = get_order_details(order_id)
@@ -240,7 +235,6 @@ def handle_order_number(m):
 
     # ==== ROTATED PAYMENT METHOD LOGIC ====
 
-    # ==== ROTATED PAYMENT METHOD LOGIC ====
     client_name = clean_name(f"{order['billing']['first_name']} {order['billing']['last_name']}")
     sequence = get_global_sequence()
     method = get_next_payment_method(total)
@@ -256,42 +250,14 @@ def handle_order_number(m):
             service = "Revolut – Artisan"
             description = "Processed via Artisan Tile Rotation."
         except ValueError as artisan_error:
-            print(f"[Fallback] Artisan payment failed: {artisan_error}. Trying Wise...")
-            try:
-                account = get_wise_account()
-                meta = get_wise_invoice_meta(total)
-                reference = generate_reference(meta["code"], client_name, sequence)
-                service = meta["name"]
-                description = meta["description"]
-                account["reference"] = reference
-                method = "wise"
-                print(f"[WISE] Wise selected with service {service}")
-            except WiseNotAvailable as wise_error:
-                print(f"[Fallback] Wise also not available: {wise_error}. Using Pantelis Revolut backup...")
-                account = get_revolut_account(total)
-                service = "Revolut – Pantelis"
-                description = "Processed via Pantelis Fallback"
-                method = "revolut"
+            print(f"[Fallback] Artisan payment failed: {artisan_error}. Using Pantelis Revolut backup...")
+            account = get_revolut_account(total)
+            service = "Revolut – Pantelis"
+            description = "Processed via Pantelis Fallback"
+            method = "revolut"
 
         if account and "reference" in account and not reference:
             reference = account["reference"]
-
-    elif method == "wise":
-        try:
-            account = get_wise_account()
-            meta = get_wise_invoice_meta(total)
-            reference = generate_reference(meta["code"], client_name, sequence)
-            service = meta["name"]
-            description = meta["description"]
-            account["reference"] = reference
-        except Exception as e:
-            print(f"[WISE FALLBACK] Wise unavailable, switching to Revolut: {e}")
-            account = get_revolut_account(total)
-            if account and "reference" in account:
-                reference = account["reference"]
-                service = "Revolut – Pantelis"
-                description = "Wise fallback – processed via Pantelis"
-                method = "revolut"
 
     else:
         account = get_revolut_account(total)
@@ -320,6 +286,7 @@ def handle_order_number(m):
         "last_method": method,
         "payment_account": account
     })
+
     # ==== SENDING PAYMENT INSTRUCTIONS ====
 
     # 1️⃣ Payment Info Header
@@ -336,10 +303,7 @@ def handle_order_number(m):
     time.sleep(2.5)
 
     # 3️⃣ Payment Method Title
-    if method == "wise":
-        msg = bot.send_message(user, "🏦 *Payment via BACS transfer*", parse_mode="Markdown")
-    else:
-        msg = bot.send_message(user, "🏦 *Payment via Revolut*", parse_mode="Markdown")
+    msg = bot.send_message(user, "🏦 *Payment via Revolut*", parse_mode="Markdown")
     sessions[user]["message_log"].append(msg.message_id)
     time.sleep(2)
 
@@ -361,17 +325,16 @@ def handle_order_number(m):
     sessions[user]["message_log"].append(msg.message_id)
     time.sleep(2)
 
-    # 7️⃣ Bank Details if Wise
-    if method == "wise":
-        if all(k in account for k in ("holder", "bank_sort", "bank_acc")):
-            msg = bot.send_message(user,
-                f"• Name: {account['holder']}\n"
-                f"• Sort Code: {account['bank_sort']}\n"
-                f"• Account Number: {account['bank_acc']}\n"
-                f"• Bank: Wise Business",
-                parse_mode="Markdown")
-            sessions[user]["message_log"].append(msg.message_id)
-            time.sleep(2)
+    # 7️⃣ Bank Details (if bank details present in account)
+    if all(k in account for k in ("holder", "bank_sort", "bank_acc")):
+        msg = bot.send_message(user,
+            f"• Name: {account['holder']}\n"
+            f"• Sort Code: {account['bank_sort']}\n"
+            f"• Account Number: {account['bank_acc']}\n"
+            f"• Bank: Revolut",
+            parse_mode="Markdown")
+        sessions[user]["message_log"].append(msg.message_id)
+        time.sleep(2)
 
     # 8️⃣ Secure Link (if available)
     if 'link' in account and account['link'].startswith("http"):
@@ -388,12 +351,12 @@ def handle_order_number(m):
     msg = bot.send_message(user, "📸 Once paid, please upload a screenshot here.", parse_mode="Markdown")
     sessions[user]["message_log"].append(msg.message_id)
 
-# ==== START BATCH 3: ADMIN CONFIRMATION & INVOICE ====
+
+# ==== START BATCH 3: ADMIN CONFIRMATION (NO INVOICE LOGIC) ====
 
 @bot.message_handler(func=lambda m: m.reply_to_message and m.from_user.id == ADMIN_ID)
 def handle_admin_reply(m):
     import traceback
-    from utils.invoice_generator import create_invoice_pdf, pdf_safe
     from utils.woo_api import get_order_details, issue_refund_coupon
     from utils.service_logic import clean_name, clean_address
 
@@ -412,14 +375,14 @@ def handle_admin_reply(m):
             break
 
     if not customer_id:
-        logging.error(f"[INVOICE] Unable to match order {order_id} to any session")
+        logging.error(f"[CONFIRM] Unable to match order {order_id} to any session")
         bot.send_message(m.chat.id, f"❌ Unable to locate session for order {order_id}.")
         return
 
     order = get_order_details(order_id)
     if not isinstance(order, dict) or 'billing' not in order:
-        logging.error(f"[INVOICE] Invalid Woo order object for ID {order_id}: {order}")
-        bot.send_message(m.chat.id, f"❌ Could not retrieve valid order data for {order_id}. Invoice not created.")
+        logging.error(f"[CONFIRM] Invalid Woo order object for ID {order_id}: {order}")
+        bot.send_message(m.chat.id, f"❌ Could not retrieve valid order data for {order_id}.")
         return
 
     total = float(order['total'])
@@ -427,23 +390,21 @@ def handle_admin_reply(m):
     session_data = sessions.get(customer_id, {})
     method = order.get('payment_method_title', '').strip().lower()
 
-    if method not in ["revolut", "paysafe", "paysafecard", "wise"]:
+    if method not in ["revolut", "paysafe", "paysafecard"]:
         method = session_data.get("last_method", method)
 
     if method in ["paysafe", "paysafecard"]:
         reference = "PSF-N/A"
-        account = {"holder": "Paysafe Payment", "reference": "PSF-N/A"}
         service_name = "Paysafecard"
         description = "Anonymous payment via retail voucher"
     else:
         reference = session_data.get("reference")
-        account = session_data.get("payment_account", {})
         service_name = session_data.get("service", "Custom Service")
-        description = session_data.get("description", "Manual invoice after admin confirmation")
+        description = session_data.get("description", "Manual confirmation after admin approval")
 
     if not reference and method not in ["paysafe", "paysafecard"]:
-        logging.error(f"[INVOICE] BLOCKED: No reference in session for order {order_id}")
-        bot.send_message(m.chat.id, f"❌ Reference not found for order {order_id}. Invoice not created.")
+        logging.error(f"[CONFIRM] BLOCKED: No reference in session for order {order_id}")
+        bot.send_message(m.chat.id, f"❌ Reference not found for order {order_id}.")
         return
 
     client_name = clean_name(f"{order['billing']['first_name']} {order['billing']['last_name']}")
@@ -460,9 +421,6 @@ def handle_admin_reply(m):
         "email": email,
         "address": client_address
     }
-
-    safe_reference = pdf_safe(reference)
-    invoice_path = os.path.join("invoices", f"{safe_reference}.pdf")
 
     def send_confirmation_to_user(amount, customer_id):
         logging.info(f"📨 send_confirmation_to_user() running for {customer_id}")
@@ -519,62 +477,29 @@ def handle_admin_reply(m):
 
         threading.Thread(target=wipe_user_messages).start()
 
-    def generate_invoice(amount):
-        try:
-            create_invoice_pdf(
-                ref=reference,
-                client=client_data,
-                service_name=service_name,
-                service_description=description,
-                amount=amount,
-                client_phone=client_phone,
-                output_path=invoice_path
-            )
-            logging.info(f"[INVOICE] Created: {invoice_path}")
-            bot.send_message(m.chat.id, f"✅ Invoice generated and saved: {reference}")
-        except Exception as e:
-            logging.error(f"[INVOICE] Creation failed: {e}")
-            bot.send_message(m.chat.id, "❌ Failed to generate invoice.")
-
     if text.startswith("OK"):
         try:
             paid = float(text[2:].strip()) if len(text) > 2 else total
             send_confirmation_to_user(paid, customer_id)
-            if method == "wise":
-                generate_invoice(paid)
         except Exception as e:
-            logging.error(f"[INVOICE] Exception: {e}")
+            logging.error(f"[CONFIRM] Exception: {e}")
             logging.error(traceback.format_exc())
             bot.send_message(customer_id, "❌ Unable to process payment. Please contact support.")
 
+
 # ==== START BATCH 4: HANDLE PROOF & SCREENSHOTS ====
 
-@bot.message_handler(
-    func=lambda m: sessions.get(m.chat.id, {}).get("step") in [
-        "awaiting_code", "awaiting_bank_screenshot", "awaiting_receipt_photo"
-    ],
-    content_types=['text', 'photo', 'sticker', 'voice', 'contact', 'location', 'document']
-)
-def handle_code_or_screenshot(m):
-    import os
-    import time
-    import threading
-    from state import sessions
-    from utils.woo_api import get_order_details
-    from utils.invoice_generator import generate_invoice
-
-    print("✅ handle_code_or_screenshot triggered")
+@bot.message_handler(func=lambda m: sessions.get(m.chat.id, {}).get("step") == "awaiting_bank_screenshot")
+def handle_bank_screenshot(m):
     user = m.chat.id
-    session = sessions.get(user, {})
-    step = session.get("step")
+    if user not in sessions:
+        sessions[user] = {}
+    session = sessions[user]
     order_id = session.get("order_id")
-
-    if step not in ["awaiting_code", "awaiting_bank_screenshot", "awaiting_receipt_photo"]:
-        return
 
     order = get_order_details(order_id)
     if not order:
-        msg = bot.send_message(user, "❌ Couldn't load your order. Please restart with /start.", parse_mode="Markdown")
+        msg = bot.send_message(user, "❌ Could not find your order. Please try again.", parse_mode="Markdown")
         sessions[user].setdefault("message_log", []).append(msg.message_id)
         return
 
@@ -590,44 +515,15 @@ def handle_code_or_screenshot(m):
             sessions[user].setdefault("message_log", []).append(msg.message_id)
             return
 
-        sessions[user].setdefault("message_log", []).append(m.message_id)
+        # Forward to admin for review
+        bot.forward_message(ADMIN_ID, user, m.message_id)
 
-        file_id = m.photo[-1].file_id if m.content_type == "photo" else m.document.file_id
-        uploads = session.get("uploads", [])
-        uploads.append(file_id)
-        sessions[user]["uploads"] = uploads
-        sessions[user]["step"] = "awaiting_code"
-
-        if not session.get("upload_timer_started"):
-            sessions[user]["upload_timer_started"] = True
-            msg = bot.send_message(user, "✅ Receipt received. You may upload more images within 20 seconds if needed.", parse_mode="Markdown")
-            sessions[user]["message_log"].append(msg.message_id)
-
-            def forward_paysafe_batch():
-                time.sleep(20)
-                print(f"⏳ Waiting complete. Forwarding Paysafe uploads for user {user}")
-                upload_files = sessions[user].get("uploads", [])
-                if not upload_files:
-                    msg = bot.send_message(user, "⚠️ No valid uploads found. Please try again.", parse_mode="Markdown")
-                    sessions[user]["message_log"].append(msg.message_id)
-                    return
-
-                summary = f"🛒 Order: {order_id}\n💳 Payment Method: Paysafecard"
-                msg = bot.send_message(ADMIN_ID, summary, parse_mode="Markdown")
-                sessions[user]["admin_msg_id"] = msg.message_id
-
-                for fid in upload_files:
-                    bot.send_document(ADMIN_ID, fid)
-
-                msg = bot.send_message(user, "🙏🏼 Thanks! Your receipt(s) have been submitted. Await admin confirmation.", parse_mode="Markdown")
-                sessions[user]["message_log"].append(msg.message_id)
-                print("✅ Paysafe receipt batch submitted.")
-
-            threading.Thread(target=forward_paysafe_batch).start()
-
+        msg = bot.send_message(user, "🙏🏼 Thanks! Your payment has been sent for review. You’ll receive a confirmation shortly.", parse_mode="Markdown")
+        sessions[user]["message_log"].append(msg.message_id)
+        print("✅ Paysafecard receipt sent for review.")
         return
 
-    # === WISE / REVOLUT LOGIC ===
+    # === REVOLUT LOGIC ===
     if m.content_type in ["photo", "document"]:
         sessions[user].setdefault("message_log", []).append(m.message_id)
 
@@ -639,40 +535,19 @@ def handle_code_or_screenshot(m):
 
         reference = session.get("reference", "")
         summary = (
-            f"🛒 Order: {order_id}\n"
-            f"💳 Paid £{total:.2f}\n"
-            f"💳 Payment Method: {method.capitalize()}"
+            f"Order: {order_id}\n"
+            f"Reference: {reference}\n"
+            f"Total: £{total:.2f}\n"
+            f"User: {user}\n"
         )
-
-        if reference:
-            summary += f"\n🧾 Reference: {reference}"
-
-        if method not in ["paysafe", "paysafecard"]:
-            account_info = account.get("holder") or account.get("link") or "N/A"
-            summary += f"\n📥 Account: {account_info}"
-
-        msg = bot.send_message(ADMIN_ID, summary, parse_mode="Markdown")
-        sessions[user]["admin_msg_id"] = msg.message_id
-
+        msg = bot.send_message(ADMIN_ID, f"📸 Payment proof uploaded.\n\n{summary}", parse_mode="Markdown")
+        sessions[user]["message_log"].append(msg.message_id)
         bot.forward_message(ADMIN_ID, user, m.message_id)
-
-        if method == "wise":
-            invoice_path = generate_invoice(
-                order_id,
-                session.get("reference", ""),
-                session.get("service", ""),
-                session.get("description", "")
-            )
-            if invoice_path and os.path.exists(invoice_path):
-                from logging import info
-                info(f"[INVOICE] Saved to file system: {invoice_path}")
 
         msg = bot.send_message(user, "🙏🏼 Thanks! Your payment has been sent for review. You’ll receive a confirmation shortly.", parse_mode="Markdown")
         sessions[user]["message_log"].append(msg.message_id)
         print("✅ Flow complete. Awaiting admin confirmation.")
 
     else:
-        msg = bot.send_message(user, "⚠️ Please upload a valid screenshot or receipt (photo/document).", parse_mode="Markdown")
-        sessions[user]["message_log"].append(msg.message_id)
-
-# ==== END OF BATCH 4 ====
+        msg = bot.send_message(user, "⚠️ Please upload a screenshot of your bank transfer or Revolut payment.", parse_mode="Markdown")
+        sessions[user].setdefault("message_log", []).append(msg.message_id)
