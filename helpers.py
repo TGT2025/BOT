@@ -1,25 +1,8 @@
-# ==== BATCH 1: REFERENCE CONSTANTS ====
 import os
 import json
 import random
 from datetime import datetime, timedelta
 import pytz
-
-WISE_REF_META = {
-    "T2": [
-        {"name": "Automation Support", "code": "AUT", "description": "Support for syncing smart devices, home assistants, and digital scheduling tools."},
-        {"name": "Wi-Fi & Audio Visual", "code": "WAV", "description": "Advanced configuration of Wi-Fi networks and audio-visual systems for hybrid home environments."},
-        {"name": "Home Tech Integration", "code": "HMT", "description": "Setup of user devices and automation tools to streamline home workflows and connectivity."}
-    ],
-    "T3": [
-        {"name": "Home Wi-Fi Tuneup", "code": "HWT", "description": "Optimization of residential Wi-Fi networks, security, and signal performance enhancements."},
-        {"name": "Connected Home Consultation", "code": "CHC", "description": "Consulting service for integrating smart home devices and custom automation solutions."}
-    ],
-    "T4": [
-        {"name": "Private Tech Advisory", "code": "PRV", "description": "High-tier technical advisory and planning for bespoke home system setups."},
-        {"name": "Private Installations Audit", "code": "PIA", "description": "Comprehensive audit and assessment of private technology installations, including networking and automation."}
-    ]
-}
 
 REFERENCE_PREFIXES = ["VIP –", "Ride –", "XCL –", "Drv –", "Exec –", "Chf –"]
 REFERENCE_SUFFIXES = ["– RT", "– FX", "– XR", "– D", "– P", "– LUX", "– DS", "– CHR"]
@@ -45,7 +28,9 @@ ROUTES = ["Windsor-Heathrow", "Oxford-London", "Chelsea-Luton",
     "Southend-Victoria", "Brighton-Central", "Cambridge-Heathrow",
     "Luton-London", "Essex-City", "Clapham-Stansted"]
 
-# ==== BATCH 2: LINK SCHEDULES ====
+REVOLUT_CHAUFFER_LINK = "https://checkout.revolut.com/pay/bc544660-b207-46c3-8dfb-7b0bb01afbea"
+REVOLUT_ARTISAN_LOW_LINK = "https://checkout.revolut.com/pay/96bd6601-0c24-4c36-9650-31d9a484fb71"
+
 REVOLUT_LINK_SCHEDULE = {
     "M4W18": {
         "LCL": "https://checkout.revolut.com/pay/b0922ad1-7419-45a9-9687-4817a2d4c13c",
@@ -70,7 +55,6 @@ HIGH_VALUE_FALLBACKS = [
     "https://checkout.revolut.com/pay/53289671-94f5-4652-b3cc-7badc1852d84"
 ]
 
-# ==== BATCH 3A: ARTISAN LINK SCHEDULES ====
 REVOLUT_ARTISAN_SCHEDULE = {
     "ARTB1": {
         "market": [
@@ -97,11 +81,6 @@ REVOLUT_ARTISAN_SCHEDULE = {
         ]
     }
 }
-
-
-# ==== BATCH 3: ARTISAN STATIC REFERENCE SYSTEM ====
-# ==== BATCH 3: ARTISAN STATIC REFERENCE SYSTEM ====
-import os
 
 ARTISAN_REFERENCE_TIERS = {
     "T1": [
@@ -168,6 +147,16 @@ def record_artisan_payment():
     save_artisan_payment_counter(counter)
 
 def get_revolut_artisan(order_total, link_type):
+    # Special link for £20-£50
+    if 20 <= order_total <= 50:
+        reference = get_static_artisan_reference(order_total)
+        return {
+            "type": "revolut_artisan",
+            "holder": "Revolut - Youssef El Osrouti",
+            "reference": reference,
+            "link": REVOLUT_ARTISAN_LOW_LINK
+        }
+
     if not artisan_time_allowed():
         raise ValueError("Artisan payments allowed only between 5AM and 11PM.")
 
@@ -197,98 +186,23 @@ def get_revolut_artisan(order_total, link_type):
         "link": link
     }
 
-# ==== CONTINUED (BATCH 4 & 5 NEXT) ====
-
-# ==== BATCH 4: WEEK CODES & REFERENCES ====
 def get_current_week_code():
     uk_time = datetime.now(pytz.timezone("Europe/London"))
     week = uk_time.isocalendar()[1]
     month = uk_time.month
     return f"M{month}W{week}"
 
-def get_current_artisan_code():
-    start_date = datetime(2025, 4, 20)
-    today = datetime.now()
-    days_passed = (today - start_date).days
-    index = days_passed // 14
-    return f"ARTB{index + 1}"
-
-# ==== BATCH 5: MAIN PAYMENT ACCOUNT FUNCTIONS ====
-# ==== BATCH 5: MAIN PAYMENT ACCOUNT FUNCTIONS ====
-
-class WiseNotAvailable(Exception):
-    pass
-
-WISE_USAGE_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "payment_rotation_tracker.json")
-ROTATION_ORDER = ["revolut2", "revolut1", "wise"]
-
-def wise_time_allowed():
-    now = datetime.now(pytz.timezone("Europe/London"))
-    return now.weekday() != 6 and 6 <= now.hour < 21  # Not Sunday, 6AM–9PM
-
-def get_today_key():
-    return datetime.now(pytz.timezone("Europe/London")).strftime("%Y-%m-%d")
-
-def load_rotation_state():
-    if os.path.exists(WISE_USAGE_FILE):
-        with open(WISE_USAGE_FILE, "r") as f:
-            return json.load(f)
-    return {}
-
-def save_rotation_state(data):
-    with open(WISE_USAGE_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-
-def get_payment_account(order_total):
-    data = load_rotation_state()
-    today = get_today_key()
-
-    if today not in data:
-        data[today] = {
-            "rotation_index": 0,
-            "forced_wise_used": False,
-            "wise_missed": False
+def get_revolut_account(order_total):
+    # Special link for £20-£50
+    if 20 <= order_total <= 50:
+        ref = get_revolut_reference(order_total)
+        return {
+            "type": "revolut",
+            "holder": "Revolut - Pantelis Aslanidis",
+            "reference": ref,
+            "link": REVOLUT_CHAUFFER_LINK
         }
 
-    state = data[today]
-
-    # First eligible payment over £95 should go to Wise
-    if order_total >= 95 and wise_time_allowed() and not state["forced_wise_used"]:
-        state["forced_wise_used"] = True
-        save_rotation_state(data)
-        return get_wise_account()
-
-    # Wise was skipped earlier, now eligible again → priority reroute
-    if state["wise_missed"] and order_total >= 95 and wise_time_allowed():
-        state["wise_missed"] = False
-        save_rotation_state(data)
-        return get_wise_account()
-
-    # Rotation logic
-    for _ in range(len(ROTATION_ORDER)):
-        method = ROTATION_ORDER[state["rotation_index"]]
-        state["rotation_index"] = (state["rotation_index"] + 1) % len(ROTATION_ORDER)
-
-        if method == "wise":
-            if order_total >= 95 and wise_time_allowed():
-                save_rotation_state(data)
-                return get_wise_account()
-            else:
-                state["wise_missed"] = True
-                continue
-
-        elif method == "revolut1":
-            save_rotation_state(data)
-            return get_revolut_account(order_total)
-
-        elif method == "revolut2":
-            save_rotation_state(data)
-            return get_revolut_account(order_total)
-
-    # Fallback in case all fail (shouldn't happen)
-    return get_revolut_account(order_total)
-
-def get_revolut_account(order_total):
     if order_total > 350:
         ref = get_revolut_reference(order_total)
         link = random.choice(HIGH_VALUE_FALLBACKS)
@@ -351,42 +265,3 @@ def get_revolut_reference(order_total: float) -> str:
         ref = random.choice(HIGH_REF)
 
     return f"{prefix}{ref}{suffix}"
-
-def get_wise_reference(order_total):
-    if order_total < 95 or not wise_time_allowed():
-        raise WiseNotAvailable("Wise not available due to value or time")
-
-    if order_total < 250:
-        tier = "T2"
-    elif order_total < 300:
-        tier = "T3"
-    else:
-        tier = "T4"
-
-    entry = random.choice(WISE_REF_META[tier])
-    return f"{entry['name']} – {entry['code']}"
-
-def get_wise_invoice_meta(order_total):
-    if order_total < 95 or not wise_time_allowed():
-        raise WiseNotAvailable("Wise not available due to value or time")
-
-    if order_total < 250:
-        tier = "T2"
-    elif order_total < 300:
-        tier = "T3"
-    else:
-        tier = "T4"
-
-    return random.choice(WISE_REF_META[tier])
-
-def get_wise_account():
-    if not wise_time_allowed():
-        raise WiseNotAvailable("Wise not available outside 6AM–8PM or on Sundays")
-
-    return {
-        "type": "wise",
-        "holder": "Pinnacle UK Consulting Ltd",
-        "reference": "Auto-generated per order",
-        "bank_sort": "23-08-01",
-        "bank_acc": "13877723"
-    }

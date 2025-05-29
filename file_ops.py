@@ -1,48 +1,25 @@
-import json
 import os
-from datetime import datetime, timedelta
-from config import TRACKING_FILE, USER_DB_FILE
+import json
 from utils.helpers import get_revolut_artisan
 
-# === Runtime storage ===
-tracking_data = {}
-user_db = set()
-rotation_state = {"last_method": "revolut"}  # Default first payment method
+ROTATION_STATE_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "payment_rotation_tracker.json")
+rotation_state = {}
 
-ROTATION_FILE = 'rotation.json'
-
-# === Load users ===
-if os.path.exists(USER_DB_FILE):
-    with open(USER_DB_FILE, 'r') as f:
-        try:
-            user_db = set(json.load(f))
-        except:
-            user_db = set()
-
-# === Load tracking ===
-if os.path.exists(TRACKING_FILE):
-    with open(TRACKING_FILE, 'r') as f:
-        try:
-            tracking_data = json.load(f)
-        except:
-            tracking_data = {}
-
-# === Load rotation state ===
-if os.path.exists(ROTATION_FILE):
-    with open(ROTATION_FILE, 'r') as f:
-        try:
-            rotation_state = json.load(f)
-            if not isinstance(rotation_state, dict) or "last_method" not in rotation_state:
-                print("[WARN] Invalid rotation format, resetting.")
-                rotation_state = {"last_method": "revolut"}
-        except Exception as e:
-            print(f"[WARN] Failed to load rotation.json: {e}")
-            rotation_state = {"last_method": "revolut"}
-
-# === Rotation logic (revolut2 = Youssef, revolut = Pantelis, wise = BACS) ===
-def get_next_payment_method(order_total: float):
+def load_rotation():
     global rotation_state
-    rotation_order = ["revolut2", "revolut", "wise"]
+    if os.path.exists(ROTATION_STATE_FILE):
+        with open(ROTATION_STATE_FILE, "r") as f:
+            rotation_state = json.load(f)
+    else:
+        rotation_state = {}
+
+def save_rotation():
+    with open(ROTATION_STATE_FILE, "w") as f:
+        json.dump(rotation_state, f, indent=2)
+
+def get_next_payment_method(order_total):
+    global rotation_state
+    rotation_order = ["revolut2", "revolut"]
     last = rotation_state.get("last_method", "revolut")
 
     if last not in rotation_order:
@@ -70,36 +47,12 @@ def get_next_payment_method(order_total: float):
             save_rotation()
             return "revolut"
 
-        elif candidate == "wise":
-            if order_total >= 150:
-                rotation_state["last_method"] = "wise"
-                save_rotation()
-                return "wise"
-
     # Final fallback
     rotation_state["last_method"] = "revolut"
     save_rotation()
     return "revolut"
 
 def set_last_payment_method(method):
+    global rotation_state
     rotation_state["last_method"] = method
     save_rotation()
-
-def save_rotation():
-    with open(ROTATION_FILE, "w") as f:
-        json.dump(rotation_state, f, indent=2)
-
-def save_users():
-    with open(USER_DB_FILE, 'w') as f:
-        json.dump(list(user_db), f)
-
-def save_tracking():
-    cutoff = datetime.now() - timedelta(days=10)
-    for pc in list(tracking_data):
-        entries = [e for e in tracking_data[pc] if datetime.fromisoformat(e['date']) > cutoff]
-        if entries:
-            tracking_data[pc] = entries
-        else:
-            del tracking_data[pc]
-    with open(TRACKING_FILE, 'w') as f:
-        json.dump(tracking_data, f, indent=2)
